@@ -1,26 +1,17 @@
-import { IRhythmBotConfig, RhythmBot } from '../bot';
+import { IRhythmBotConfig,RhythmBot } from '../bot';
+import { MediaItem } from '../media';
 import { createInfoEmbed } from '../helpers';
-import {
-    IBot,
-    IBotPlugin,
-    readDir,
-    readJson,
-    writeJson,
-    deleteFile,
-    fileExists,
-    SuccessfulParsedMessage,
-    CommandMap,
-    IBotConfig,
-} from 'discord-bot-quickstart';
+import { IBot, IBotPlugin, readDir, readJson, writeJson, deleteFile, fileExists, SuccessfulParsedMessage, CommandMap, IBotConfig } from 'discord-bot-quickstart';
 import { Message, Client } from 'discord.js';
-import { EntityRepository } from '@mikro-orm/core';
-import { ORM } from '../app';
-import { Playlist } from '../media/playlist.model';
-import { MediaItem } from '../media/media-item.model';
+
+const playlistDir = '../playlists';
+
+interface IPlaylist {
+    list?: Array<MediaItem>;
+}
 
 export default class PlaylistPlugin extends IBotPlugin {
     bot: RhythmBot;
-    playlistRepo: EntityRepository<Playlist> = ORM.em.getRepository(Playlist);
 
     preInitialize(bot: IBot<IRhythmBotConfig>) {
         this.bot = bot as RhythmBot;
@@ -28,93 +19,65 @@ export default class PlaylistPlugin extends IBotPlugin {
 
     registerDiscordCommands(map: CommandMap<(cmd: SuccessfulParsedMessage<Message>, msg: Message) => void>) {
         map.on('playlist', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-            switch (cmd.arguments[0]) {
-                case 'load':
-                    this.load(cmd, msg);
-                    break;
-                case 'save':
-                    this.save(cmd, msg);
-                    break;
-                case 'delete':
-                    this.delete(cmd, msg);
-                    break;
-                case 'list':
-                    this.list(cmd, msg);
-                    break;
-                default:
-                    msg.channel.send(createInfoEmbed(`Unknown command`));
-                    break;
+            switch(cmd.arguments[0]) {
+                case 'load': this.load(cmd, msg); break;
+                case 'save': this.save(cmd, msg); break;
+                case 'delete': this.delete(cmd, msg); break;
+                default: this.list(cmd, msg); break;   
             }
         });
     }
 
-    async list(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
-        const playlists = await this.playlistRepo.findAll({ fields: ['name'] });
+    list(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
+        let files = readDir(playlistDir)
+            .filter(file => file.includes('.json'))
+            .map((file, i) => `${i + 1}. ${file.replace('.json', '')}`);
 
-        msg.channel.send(
-            createInfoEmbed(
-                `Playlists`,
-                `${playlists.length == 0 ? 'No playlists' : playlists.map((p) => p.name).join('\n')}`
-            )
-        );
+        msg.channel.send(createInfoEmbed(`Playlists`, `${files.length == 0 ? 'No Playlists' : files.join('\n')}`));
     }
 
-    async load(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
+    load(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
         let name = cmd.arguments[1];
-        if (name) {
-            const playlist = await this.playlistRepo.findOne({ name });
-
-            if (playlist == null) {
-                msg.channel.send(createInfoEmbed(`Could not find playlist "${name}"`));
-            } else {
-                if (cmd.arguments[2] != 'append') {
-                    this.bot.player.clear();
-                }
-                this.bot.player.queue.push(...playlist.list);
-
-                this.bot.player.determineStatus();
-                msg.channel.send(createInfoEmbed(`Loaded playlist "${name}"`));
-            }
-        }
-    }
-
-    async save(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
-        let name = cmd.arguments[1];
-        if (name) {
-            if (this.bot.player.queue.length > 0) {
-                let playlist = await this.playlistRepo.findOne({ name });
-                if (playlist != null) {
-                    playlist.list = this.bot.player.queue;
+        if(name) {
+            let queue: IPlaylist = readJson(playlistDir, `${name}.json`) || { list: [] };
+            if(queue.list) {
+                if(cmd.arguments[2] == 'append') {
+                    this.bot.player.queue.push(...queue.list);
                 } else {
-                    playlist = ORM.em.create(Playlist, { name, list: this.bot.player.queue });
+                    this.bot.player.clear();
+                    this.bot.player.queue.push(...queue.list);
                 }
-                await this.playlistRepo.persistAndFlush(playlist);
-
-                msg.channel.send(createInfoEmbed(`Saved playlist "${name}"`));
-            } else {
-                msg.channel.send(createInfoEmbed(`Cannot save empty playlist`));
+                this.bot.player.determineStatus();
+                msg.channel.send(createInfoEmbed(`Loaded Playlist "${name}"`));
             }
         }
     }
 
-    async delete(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
+    save(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
         let name = cmd.arguments[1];
-        if (name) {
-            const [deletedPlaylist] = await Promise.all([this.playlistRepo.nativeDelete({ name })]);
-
-            if (deletedPlaylist > 0) {
-                msg.channel.send(createInfoEmbed(`Deleted playlist "${name}"`));
-            } else {
-                msg.channel.send(createInfoEmbed(`Playlist not found "${name}"`));
+        if(name) {
+            let queue: IPlaylist = { list: this.bot.player.queue.map(x => x) };
+            if(queue.list.length > 0) {
+                writeJson(queue, playlistDir, `${name}.json`);
             }
+            msg.channel.send(createInfoEmbed(`Saved Playlist "${name}"`));
         }
     }
 
-    registerConsoleCommands() {}
+    delete(cmd: SuccessfulParsedMessage<Message>, msg: Message) {
+        let name = cmd.arguments[1];
+        if(name && fileExists(playlistDir, `${name}.json`)) {
+            deleteFile(playlistDir, `${name}.json`);
+            msg.channel.send(createInfoEmbed(`Deleted Playlist "${name}"`));
+        }
+    }
 
-    clientBound() {}
+    registerConsoleCommands() { }
 
-    postInitialize() {}
+    clientBound() { }
 
-    onReady() {}
+    postInitialize() { }
+
+    onReady() { }
+
 }

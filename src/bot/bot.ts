@@ -2,26 +2,17 @@ import { MediaPlayer } from '../media';
 import { BotStatus } from './bot-status';
 import { IRhythmBotConfig } from './bot-config';
 import { joinUserChannel, createInfoEmbed, createErrorEmbed, secondsToTimestamp, createEmbed } from '../helpers';
-import {
-    IBot,
-    CommandMap,
-    Client,
-    ParsedArgs,
-    Interface,
-    SuccessfulParsedMessage,
-    Message,
-    readFile,
-    MessageReaction,
-    User,
-} from 'discord-bot-quickstart';
-import { search as yts } from 'yt-search';
-import { EntityRepository } from '@mikro-orm/sqlite';
-import { ORM } from '../app';
-import { MediaItem } from '../media/media-item.model';
+import { IBot, CommandMap, Client, ParsedArgs, Interface, SuccessfulParsedMessage, Message, readFile, MessageReaction, User } from 'discord-bot-quickstart';
+import * as yts from 'yt-search';
 
 const helptext = readFile('../helptext.txt');
-const random = (array) => array[Math.floor(Math.random() * array.length)];
-const pingPhrases = [`Can't stop won't stop!`, `:ping_pong: Pong Bitch!`];
+const random = (array) => {
+    return array[Math.floor(Math.random() * array.length)];
+};
+const pingPhrases = [ 
+    `Can't stop won't stop!`, 
+    `:ping_pong: Pong Bitch!` 
+];
 
 export class RhythmBot extends IBot<IRhythmBotConfig> {
     helptext: string;
@@ -34,143 +25,130 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
                 deafen: false,
                 pause: false,
                 play: false,
-                reconnect: true,
+                reconnect: true
             },
             discord: {
-                log: true,
+                log: true
             },
             command: {
-                symbol: '!',
+                symbol: '!'
             },
             directory: {
                 plugins: './plugins',
-                logs: '../bot.log',
+                logs: '../bot.log'
             },
             queue: {
                 announce: true,
-                repeat: false,
+                repeat: false
             },
             stream: {
                 seek: 0,
                 volume: 1,
                 bitrate: 'auto',
-                forwardErrorCorrection: false,
+                forwardErrorCorrection: false
             },
             emojis: {
                 addSong: '👍',
                 stopSong: '⏹️',
                 playSong: '▶️',
                 pauseSong: '⏸️',
-                skipSong: '⏭️',
-            },
+                skipSong: '⏭️'
+            }
         });
         this.helptext = helptext;
     }
 
     onRegisterDiscordCommands(map: CommandMap<(cmd: SuccessfulParsedMessage<Message>, msg: Message) => void>): void {
         map.on('ping', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-            let phrases = pingPhrases.slice();
-            if (msg.guild) {
-                phrases = phrases.concat(msg.guild.emojis.cache.array().map((x) => x.name));
-            }
-            msg.channel.send(random(phrases));
-        })
+                let phrases = pingPhrases.slice();
+                if(msg.guild)
+                    phrases = phrases.concat(msg.guild.emojis.cache.array().map(x => x.name));
+                msg.channel.send(random(phrases));
+            })
             .on('help', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 msg.channel.send(this.helptext);
             })
             .on('join', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 joinUserChannel(msg)
-                    .then((connection) => {
+                    .then(connection => {
                         this.player.connection = connection;
                         msg.channel.send(createInfoEmbed(`Joined Channel: ${connection.channel.name}`));
-                        if (this.config.auto.play) {
+                        if(this.config.auto.play)
                             this.player.play();
-                        }
                     })
-                    .catch((err) => {
+                    .catch(err => {
                         msg.channel.send(createErrorEmbed(err));
                     });
             })
             .on('leave', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.stop();
                 this.player.connection = null;
-                this.client.voice.connections.forEach((conn) => {
+                this.client.voice.connections.forEach(conn => {
                     conn.disconnect();
                     msg.channel.send(createInfoEmbed(`Disconnecting from channel: ${conn.channel.name}`));
                 });
             })
-            .on('play', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                this.joinChannelAndPlay(msg);
-            })
+            // .on('play', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
+            //     new Promise<void>(done => {
+            //         if(!this.player.connection) {
+            //             joinUserChannel(msg)
+            //                 .then(conn => {
+            //                     this.player.connection = conn;
+            //                     done();
+            //                 });
+            //         } else
+            //             done();
+            //     }).then(() => {
+            //         this.player.play();
+            //     });
+            // })
             .on('pause', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.pause();
             })
             .on('time', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 let media = this.player.queue.first;
-                if (this.player.playing && this.player.dispatcher) {
+                if(this.player.playing && this.player.dispatcher) {
                     let elapsed = secondsToTimestamp(this.player.dispatcher.totalStreamTime / 1000);
                     msg.channel.send(createInfoEmbed('Time Elapsed', `${elapsed} / ${media.duration}`));
-                } else if (this.player.queue.first) {
+                } else if(this.player.queue.first) {
                     msg.channel.send(createInfoEmbed('Time Elapsed', `00:00:00 / ${media.duration}`));
                 }
             })
-            .on('search', async (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                let noResults = false;
-
-                if (cmd.body != null && cmd.body !== '') {
-                    const videos = await yts({ query: cmd.body, pages: 1 }).then((res) => res.videos);
-                    if (videos != null && videos.length > 0) {
-                        await Promise.all(
-                            videos
-                                .slice(0, 3)
-                                .map((video) =>
-                                    createEmbed()
-                                        .setTitle(`${video.title}`)
-                                        .addField('Author:', `${video.author.name}`, true)
-                                        .addField('Duration', `${video.timestamp}`, true)
-                                        .setThumbnail(video.image)
-                                        .setURL(video.url)
-                                )
-                                .map((embed) =>
-                                    msg.channel.send(embed).then((m) => m.react(this.config.emojis.addSong))
-                                )
-                        );
-                    } else {
-                        noResults = true;
-                    }
-                } else {
-                    noResults = true;
-                }
-
-                if (noResults) {
-                    msg.channel.send(createInfoEmbed(`No songs found`));
-                }
+            .on('search', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
+                yts({
+                    query: cmd.body,
+                    pages: 1
+                }, (err, result) => {
+                    result.videos
+                        .slice(0, 3)
+                        .forEach((v, idx) => {
+                            const embed = createEmbed()
+                                .setTitle(`${v.title}`)
+                                .addField('Author:', `${v.author.name}`, true)
+                                .addField('Duration', `${v.timestamp}`, true)
+                                .setThumbnail(v.image)
+                                .setURL(v.url);
+                            msg.channel.send(embed)
+                                .then(m => m.react(this.config.emojis.addSong));
+                        });
+                });
             })
-            .on('add', async (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if (cmd.arguments.length > 0) {
-                    for (const arg in cmd.arguments) {
+            .on('add', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
+                if(cmd.arguments.length > 0) {
+                    cmd.arguments.forEach(arg => {
                         let parts = arg.split(':');
-                        if (parts.length == 2) {
-                            await this.player.addMedia({
-                                type: parts[0],
-                                url: parts[1],
-                                requestor: msg.author.username,
-                            });
-                        } else {
+                        if(parts.length == 2) {
+                            this.player.addMedia(parts[1]);
+                        } else
                             msg.channel.send(createErrorEmbed(`Invalid media type format`));
-                        }
-                    }
-
-                    if (this.player.queue.length > 0 && !this.player.playing) {
-                        this.joinChannelAndPlay(msg);
-                    }
+                    });
                 }
             })
             .on('remove', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if (cmd.arguments.length > 0) {
+                if(cmd.arguments.length > 0) {
                     let idx = parseInt(cmd.arguments[0]);
                     let item = this.player.at(idx - 1);
-                    if (item) {
+                    if(item) {
                         this.player.remove(item);
                     }
                 }
@@ -182,33 +160,27 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
                 this.player.stop();
             })
             .on('list', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                let items = this.player.queue.map(
-                    (item, idx) =>
-                        `${idx + 1}. Type: "${item.type}", Title: "${item.name}${
-                            item.requestor ? `", Requested By: ${item.requestor}` : ''
-                        }"`
-                );
-                if (items.length > 0) {
+                let items = this.player.queue
+                    .map((item, idx) => `${idx + 1}. Title: "${item.name}"`);
+                if(items.length > 0)
                     msg.channel.send(createInfoEmbed('Current Playing Queue', items.join('\n\n')));
-                } else {
+                else
                     msg.channel.send(createInfoEmbed(`There are no songs in the queue.`));
-                }
             })
             .on('clear', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.clear();
             })
             .on('move', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if (cmd.arguments.length > 1) {
+                if(cmd.arguments.length > 1) {
                     let current = Math.min(Math.max(parseInt(cmd.arguments[0]), 0), this.player.queue.length - 1),
                         targetDesc = cmd.arguments[0],
                         target = 0;
-                    if (targetDesc == 'up') {
+                    if(targetDesc == 'up')
                         target = Math.min(current - 1, 0);
-                    } else if (targetDesc == 'down') {
+                    else if(targetDesc == 'down')
                         target = Math.max(current + 1, this.player.queue.length - 1);
-                    } else {
+                    else
                         target = parseInt(targetDesc);
-                    }
 
                     this.player.move(current, target);
                 }
@@ -217,9 +189,9 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
                 this.player.shuffle();
             })
             .on('volume', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if (cmd.arguments.length > 0) {
+                if(cmd.arguments.length > 0) {
                     let temp = cmd.arguments[0];
-                    if (temp) {
+                    if(temp) {
                         let volume = Math.min(Math.max(parseInt(temp), 0), 100);
                         this.player.setVolume(volume);
                     }
@@ -228,7 +200,7 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
             })
             .on('repeat', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.config.queue.repeat = !this.config.queue.repeat;
-                msg.channel.send(createInfoEmbed(`Repeat mode is ${this.config.queue.repeat ? 'on' : 'off'}`));
+                msg.channel.send(createInfoEmbed(`Repeat mode is ${this.config.queue.repeat ? 'on':'off'}`));
             });
     }
 
@@ -258,11 +230,7 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
                     if (embed) {
                         if (reaction.emoji.name === this.config.emojis.addSong && embed.url) {
                             this.logger.debug(`Emoji Click: Adding Media: ${embed.url}`);
-                            this.player.addMedia({
-                                type: 'youtube',
-                                url: embed.url,
-                                requestor: user.username,
-                            });
+                            this.player.addMedia(embed.url);
                         }
                         if (reaction.emoji.name === this.config.emojis.stopSong) {
                             this.logger.debug('Emoji Click: Stopping Song');
@@ -284,42 +252,19 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
                     reaction.users.remove(user.id);
                 }
             }
-        });
+        })
     }
 
     onReady(client: Client): void {
         this.player.determineStatus();
         console.log(`Guilds: ${this.client.guilds.cache.keyArray().length}`);
-        this.client.guilds.cache.forEach((guild) => {
-            console.log(`\nGuild Name: ${guild.name}`);
-
-            const channels = guild.channels.cache
-                .filter((x) => x.isText() && x.permissionsFor(this.client.user).has('MANAGE_MESSAGES'))
-                .map((x) => x.name);
-
-            if (channels && channels.length > 0) {
-                console.log(`Can manage message in these channels \n${channels.join('\n')}`);
-            } else {
-                console.log('Unable to manage messages on this guild');
-            }
+        this.client.guilds.cache.forEach(guild => {
+            console.log(`Guild Name: ${guild.name}`);
+            const manageMessagesRole = guild.roles.cache.has('MANAGE_MESSAGES');
+            console.log(`- Can Manage Messages: ${manageMessagesRole}`);
         });
     }
 
-    onRegisterConsoleCommands(map: CommandMap<(args: ParsedArgs, rl: Interface) => void>): void {}
-
-    joinChannelAndPlay(msg: Message) {
-        new Promise<void>((done) => {
-            if (!this.player.connection) {
-                joinUserChannel(msg).then((conn) => {
-                    this.player.connection = conn;
-                    msg.channel.send(createInfoEmbed(`Joined Channel: ${conn.channel.name}`));
-                    done();
-                });
-            } else {
-                done();
-            }
-        }).then(() => {
-            this.player.play();
-        });
-    }
+    onRegisterConsoleCommands(map: CommandMap<(args: ParsedArgs, rl: Interface) => void>): void { }
+    
 }

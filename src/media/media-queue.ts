@@ -1,6 +1,7 @@
 import { MediaItem } from './media-item.model';
 
 export class MediaQueue extends Array<MediaItem> {
+
     get first(): MediaItem {
         return this[0];
     }
@@ -14,15 +15,13 @@ export class MediaQueue extends Array<MediaItem> {
     }
 
     dequeue(item?: MediaItem): MediaItem {
-        if (item) {
+        if(item) {
             let idx = this.indexOf(item);
-            if (idx > -1) {
+            if(idx > -1)
                 this.splice(idx, 1);
-            }
             return item;
-        } else {
+        } else
             return this.shift();
-        }
     }
 
     clear() {
@@ -30,8 +29,8 @@ export class MediaQueue extends Array<MediaItem> {
     }
 
     shuffle() {
-        let currentIndex = this.length,
-            temporaryValue,
+        let currentIndex = this.length, 
+            temporaryValue, 
             randomIndex;
 
         while (0 !== currentIndex) {
@@ -45,8 +44,9 @@ export class MediaQueue extends Array<MediaItem> {
     }
 
     move(key1, key2) {
-        if (key1 != key2) {
+        if(key1 != key2) {
             this.splice(key2, 0, this.splice(key1, 1)[0]);
         }
     }
+
 }

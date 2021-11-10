@@ -10,12 +10,13 @@ export class BotStatus {
     setBanner(status: string) {
         this.client.user.setPresence({
             activity: {
-                name: status,
-            },
+                name: status
+            }
         });
     }
 
     setActivity(activity: PresenceStatusData) {
-        this.client.user.setStatus(activity);
+        this.client.user.setStatus(activity)
     }
+    
 }
