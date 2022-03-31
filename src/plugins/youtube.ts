@@ -18,26 +18,7 @@ export default class YoutubePlugin extends IBotPlugin {
 
     registerDiscordCommands(map: CommandMap<(cmd: SuccessfulParsedMessage<Message>, msg: Message) => void>) {
         map.on(commandName, (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-            return new Promise<void>(done => {
-                if(cmd.arguments.length > 0) {
-                    cmd.arguments.forEach(arg => {
-                        this.bot.player.addMedia(arg).then(() => {
-                            done();
-                        })
-                    });
-                }
-            }).then(() => {
-                if(!this.bot.player.connection) {
-                    joinUserChannel(msg)
-                        .then(conn => {
-                            this.bot.player.connection = conn;
-                            if(!this.bot.player.playing) {                        
-                                this.bot.player.play();
-                            }
-                        })
-                }
-                
-            });
+            return this.addSongAndPlayMusic(cmd);
         });
     }
 
@@ -48,5 +29,18 @@ export default class YoutubePlugin extends IBotPlugin {
     postInitialize() { }
     
     onReady() { }
+
+    async addSongAndPlayMusic(cmd: SuccessfulParsedMessage<Message>){
+        if (cmd.body.length > 0) {
+            await this.bot.player.addMedia(cmd.body);
+            if (!this.bot.player.connection) {
+                let conn = await joinUserChannel(cmd.message);
+                this.bot.player.connection = conn;
+                if (!this.bot.player.playing) {
+                    this.bot.player.play();
+                }
+            }
+        }
+    }
 
 }
