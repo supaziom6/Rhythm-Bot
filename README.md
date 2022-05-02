@@ -1,12 +1,8 @@
-# Rhythm-Bot 2.1.5 Search / Rich Text / Buttons!
-- New search command anything after !search will be searched against youtube and return the top 3 results
-- Press the thumbs up reaction emoji to add the item to your queue
-    - Note that you will want to give the bot permission to remove emojis in the text channel, this is the MANAGE_MESSAGES permission
-- Node version has updated from 10.x.x to 12.x.x due to discord.js update
-- New npm packages to install
-- Replaced dependence on manually installing ffmpeg
-    - Now ffmpeg is installed via npm with ffmpeg-static when you do a simple npm install
-- In addition to the reaction button interaction on the search command you can now use buttons for the new playing control
+# Rhythm-Bot V2
+- Simplified the commands so you can play/join/search using the play command
+
+
+
 
 ![Image](https://imgur.com/B2xLVgU.png)
 

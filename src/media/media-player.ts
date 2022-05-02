@@ -5,12 +5,11 @@ import { MediaItem } from './media-item.model';
 import { IMediaType } from './media-type.model';
 import { secondsToTimestamp } from '../helpers';
 import { createEmbed, createErrorEmbed, createInfoEmbed } from '../helpers';
-import { Logger, TextChannel, DMChannel, NewsChannel, VoiceConnection, StreamDispatcher, any } from 'discord-bot-quickstart';
+import { Logger, TextChannel, DMChannel, NewsChannel, VoiceConnection, StreamDispatcher } from 'discord-bot-quickstart';
 import { Readable } from 'stream';
 import * as ytdl from 'ytdl-core';
 import * as ytpl from 'ytpl';
 import * as yts from 'yt-search';
-import { doesNotReject } from 'assert';
 
 export class MediaPlayer {
     typeRegistry: Map<string, IMediaType> = new Map<string, IMediaType>();
@@ -43,92 +42,77 @@ export class MediaPlayer {
         });
     }
 
-    addMedia(url: string): Promise<void> {
-        return new Promise<void>((done, error) => {
-            if(!url.includes('https://')){
+    async addMedia(url: string): Promise<void> {
+        try {
+            if (!url.includes('https://')) {
                 yts({
                     query: url,
                     pages: 1
-                }, (err, result) => {                    
-                    this.QueuYoutubeSong(result.videos[0].url).then(() =>{
-                        done();
-                    }).catch(err => error(err));
-                    
+                }, async (err, result) => {
+                    await this.QueuYoutubeSong(result.videos[0].url);
                 });
             }
-            else if(url.includes('/playlist'))
-            {
-                ytpl(url)
-                        .then(playlist => {
-                            const items = playlist.items.map(item => (<MediaItem>{ url: item.url, name: item.title }))
-                            items.forEach(element => {
-                                this.determineStatus();
-                                this.queue.enqueue(element);
-                            });
+            else if (url.includes('/playlist')) {
+                let playlist = await ytpl(url)
+                const items = playlist.items.map(item => (<MediaItem>{ url: item.url, name: item.title }));
+                items.forEach(element => {
+                    this.determineStatus();
+                    this.queue.enqueue(element);
+                });
 
-                            if(this.channel) {
-                                let itemsS = items.map((item, idx) => `${idx + 1}. Title: "${item.name}"`);
-                                this.channel.send(
-                                    createInfoEmbed('Tracks Added', itemsS.join('\n\n'))
-                                );
-                            }
-                            done();
-                        })
-                        .catch(err => error(err));
+                if (this.channel) {
+                    let itemsS = items.map((item_2, idx) => `${idx + 1}. Title: "${item_2.name}"`);
+                    this.channel.send(
+                        createInfoEmbed('Tracks Added', itemsS.join('\n\n'))
+                    );
+                }
             }
-            else{
-                this.QueuYoutubeSong(url).catch(err => error(err)).then(() =>{
-                    done();
-                }).catch(err => error(err));
+            else {
+                await this.QueuYoutubeSong(url);
             }
-        })
-        .catch(err => {
-            if(this.channel)
+        } catch (err) {
+            if (this.channel)
                 this.channel.send(createErrorEmbed(`Error adding track: ${err}`));
-        });
+        }
     }
 
-    QueuYoutubeSong(url: string): Promise<void> {
-        return new Promise<void>((done, error) => {
-            ytdl.getInfo(url)
-            .then(info => {
-                let temp:any;
-                temp = info;
-                let item:MediaItem = {
-                    url: url,
-                    name: info.videoDetails.title ? info.videoDetails.title : 'Unknown',
-                    duration: secondsToTimestamp(parseInt(info.videoDetails.lengthSeconds) || 0)
-                };
-                    
-                this.queue.enqueue(item);
-                if(temp.response.contents.twoColumnWatchNextResults.playlist){
-                    temp.response.contents.twoColumnWatchNextResults.playlist.playlist.contents.forEach(element => {
-                        if(element.playlistPanelVideoRenderer)
-                        {
-                            let item2:MediaItem ={
-                                url: `https://www.youtube.com/watch?v=${element.playlistPanelVideoRenderer.videoId}`,
-                                name: element.playlistPanelVideoRenderer.title.simpleText,
-                                duration: element.playlistPanelVideoRenderer.lengthText.simpleText
-                            }
-                            this.determineStatus();
-                            this.queue.enqueue(item2);
-                        }
-                    });
+    async QueuYoutubeSong(url: string) {
+        let info = await ytdl.getInfo(url);
+        let temp:any;
+        temp = info;
+        let item:MediaItem = {
+            url: url,
+            name: info.videoDetails.title ? info.videoDetails.title : 'Unknown',
+            duration: secondsToTimestamp(parseInt(info.videoDetails.lengthSeconds) || 0)
+        };
+            
+        this.queue.enqueue(item);
+        
+        let playlist = temp.response.contents.twoColumnWatchNextResults.playlist;
+        if(playlist){
+            playlist.contents.forEach(element => {
+                if(element.playlistPanelVideoRenderer)
+                {
+                    let item2:MediaItem ={
+                        url: `https://www.youtube.com/watch?v=${element.playlistPanelVideoRenderer.videoId}`,
+                        name: element.playlistPanelVideoRenderer.title.simpleText,
+                        duration: element.playlistPanelVideoRenderer.lengthText.simpleText
+                    }
+                    this.determineStatus();
+                    this.queue.enqueue(item2);
                 }
-                
-                if(this.channel && item)
-                    this.channel.send(
-                        createEmbed()
-                            .setTitle('Track Added')
-                            .addFields(
-                                { name: 'Title:', value: item.name },
-                                { name: 'Position:', value: `${this.queue.indexOf(item) + 1}`, inline: true },
-                                )
-                        );
-                done();
-            })
-            .catch(err => error(err));
-        })
+            });
+        }
+        
+        if(this.channel && item)
+            this.channel.send(
+                createEmbed()
+                    .setTitle('Track Added')
+                    .addFields(
+                        { name: 'Title:', value: item.name },
+                        { name: 'Position:', value: `${this.queue.indexOf(item) + 1}`, inline: true },
+                        )
+                );
     }
 
 
