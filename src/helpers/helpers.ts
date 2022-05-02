@@ -1,25 +1,25 @@
-
-import { Message, VoiceConnection, MessageEmbed } from 'discord.js';
-import * as moment from 'moment';
+import { joinVoiceChannel, VoiceConnection } from '@discordjs/voice';
+import { Message, MessageEmbed } from 'discord.js';
 
 export function joinUserChannel(msg: Message): Promise<VoiceConnection> {
     return new Promise((done, error) => {
         let channel = msg.member.voice.channel;
-        if(channel && channel.type === 'voice') {
-            channel.join()
-                .then(connection => {
-                    done(connection);
-                });
+        if(channel && channel.type === 'GUILD_VOICE') {
+            done(joinVoiceChannel({
+                channelId: channel.id,
+                guildId: channel.guild.id,
+                adapterCreator: channel.guild.voiceAdapterCreator,
+                selfDeaf: false,
+                selfMute: false
+            }));
         } else
             error(`User isn't on a voice channel!`);
     });
 }
 
-export function secondsToTimestamp(seconds: number): string {
-    return moment()
-        .startOf('day')
-        .seconds(seconds)
-        .format('HH:mm:ss');
+export function createEmbedObj (msg: MessageEmbed)
+{
+    return { embeds: [msg] };
 }
 
 export function createEmbed() {

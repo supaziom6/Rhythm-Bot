@@ -1,10 +1,15 @@
 import { MediaPlayer } from '../media';
 import { BotStatus } from './bot-status';
 import { IRhythmBotConfig } from './bot-config';
-import { createInfoEmbed, secondsToTimestamp } from '../helpers';
-import { IBot, CommandMap, Client, ParsedArgs, Interface, SuccessfulParsedMessage, Message, readFile, MessageReaction, User } from 'discord-bot-quickstart';
+import { createLogger, joinUserChannel } from '../helpers';
+import { Client, ClientOptions, Intents, Message, MessageReaction, User } from 'discord.js';
+import winston from 'winston';
+import { CommandMap } from '../models/CommandMap';
+import { parse, SuccessfulParsedMessage } from "discord-command-parser";
+import { getVoiceConnection } from "@discordjs/voice"
+import fs from "fs";
 
-const helptext = readFile('../helptext.txt');
+const helptext = fs.readFileSync(__dirname + '/../../../helptext.txt', { encoding: 'utf8' });
 const random = (array) => {
     return array[Math.floor(Math.random() * array.length)];
 };
@@ -13,55 +18,98 @@ const pingPhrases = [
     `:ping_pong: Pong Bitch!` 
 ];
 
-export class RhythmBot extends IBot<IRhythmBotConfig> {
+export class RhythmBot {
+    readonly commands: CommandMap<(cmd: SuccessfulParsedMessage<Message<boolean>>, msg: Message) => void>;
     helptext: string;
     player: MediaPlayer;
     status: BotStatus;
+    logger: winston.Logger;
+    config: IRhythmBotConfig;
+    client: Client;
 
     constructor(config: IRhythmBotConfig) {
-        super(config, <IRhythmBotConfig>{
-            auto: {
+        config.auto = {
                 deafen: false,
                 pause: false,
                 play: false,
                 reconnect: true
-            },
-            discord: {
-                log: true
-            },
-            command: {
-                symbol: '!'
-            },
-            directory: {
-                plugins: './plugins',
-                logs: '../bot.log'
-            },
-            queue: {
+            };
+        config.queue = {
                 announce: true,
                 repeat: false
-            },
-            stream: {
+            };
+        config.stream = {
                 seek: 0,
                 volume: 1,
                 bitrate: 'auto',
                 forwardErrorCorrection: false
-            },
-            emojis: {
+            };
+        config.emojis = {
                 addSong: '👍',
                 stopSong: '⏹️',
                 playSong: '▶️',
                 pauseSong: '⏸️',
                 skipSong: '⏭️'
+            };
+        this.config = config;
+
+        this.helptext = helptext;
+        this.logger = createLogger();
+        this.commands = new CommandMap();
+
+        const myIntents = new Intents();
+        myIntents.add(Intents.FLAGS.GUILD_VOICE_STATES);
+        myIntents.add(Intents.FLAGS.GUILDS);
+        myIntents.add(Intents.FLAGS.GUILD_MESSAGES);
+        myIntents.add(Intents.FLAGS.GUILD_MESSAGE_REACTIONS);
+
+        let options: ClientOptions = {
+            shards: "auto",
+            intents: myIntents,
+            partials: ['MESSAGE', 'CHANNEL', 'REACTION'],
+        };
+
+
+        this.client = new Client(options);
+        this.client.login(config.token);
+
+        // Notify when they client is online
+        this.client.on('ready', () => {
+            this.logger.debug('Bot Online');
+            this.onReady(this.client);
+        });
+
+        // Process Messages and turn them into commands
+        this.client.on("messageCreate", async (message) => {
+            let parsed = parse(message, this.config.prefix);
+            if (!parsed.success)
+                return;
+            this.parsedMessage(parsed);
+            let handlers = this.commands.get(parsed.command);
+            if (handlers) {
+                this.logger.debug(`Bot Command: ${message.content}`);
+                handlers.forEach(handle => {
+                    handle(parsed as SuccessfulParsedMessage<Message<boolean>>, message);
+                });
             }
         });
-        this.helptext = helptext;
+
+        // Handel any client errors.
+        this.client.on('error', (error) => {
+            this.logger.error(error);
+            console.log(error);
+        });
+        
+        this.onClientCreated(this.client);
+        this.onRegisterDiscordCommands(this.commands);
+
     }
 
     onRegisterDiscordCommands(map: CommandMap<(cmd: SuccessfulParsedMessage<Message>, msg: Message) => void>): void {
         map.on('ping', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 let phrases = pingPhrases.slice();
                 if(msg.guild)
-                    phrases = phrases.concat(msg.guild.emojis.cache.array().map(x => x.name));
+                    phrases = phrases.concat(msg.guild.emojis.cache.map(x => x.name));
                 msg.channel.send(random(phrases));
             })
             .on('help', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
@@ -70,22 +118,11 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
             .on('leave', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.stop();
                 this.player.connection = null;
-                this.client.voice.connections.forEach(conn => {
-                    conn.disconnect();
-                    msg.channel.send(createInfoEmbed(`Disconnecting from channel: ${conn.channel.name}`));
-                });
+                const connection = getVoiceConnection(msg.guild.id);
+                connection.destroy();
             })
             .on('pause', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.pause();
-            })
-            .on('np', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                let media = this.player.queue.first;
-                if(this.player.playing && this.player.dispatcher) {
-                    let elapsed = secondsToTimestamp(this.player.dispatcher.totalStreamTime / 1000);
-                    msg.channel.send(createInfoEmbed('Time Elapsed', `${elapsed} / ${media.duration}`));
-                } else if(this.player.queue.first) {
-                    msg.channel.send(createInfoEmbed('Time Elapsed', `00:00:00 / ${media.duration}`));
-                }
             })
             .on('remove', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 if(cmd.arguments.length > 0) {
@@ -102,52 +139,36 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
             .on('stop', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.stop();
             })
-            .on('list', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                let items = this.player.queue
-                    .map((item, idx) => `${idx + 1}. Title: "${item.name}"`);
-                if(items.length > 0)
-                    msg.channel.send(createInfoEmbed('Current Playing Queue', items.join('\n\n')));
-                else
-                    msg.channel.send(createInfoEmbed(`There are no songs in the queue.`));
-            })
+            // .on('list', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
+            //     let items = this.player.queue
+            //         .map((item, idx) => `${idx + 1}. Title: "${item.name}"`);
+            //     if(items.length > 0)
+            //         msg.channel.send(createInfoEmbed('Current Playing Queue', items.join('\n\n')));
+            //     else
+            //         msg.channel.send(createInfoEmbed(`There are no songs in the queue.`));
+            // })
             .on('clear', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
                 this.player.clear();
             })
-            .on('move', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if(cmd.arguments.length > 1) {
-                    let current = Math.min(Math.max(parseInt(cmd.arguments[0]), 0), this.player.queue.length - 1),
-                        targetDesc = cmd.arguments[0],
-                        target = 0;
-                    if(targetDesc == 'up')
-                        target = Math.min(current - 1, 0);
-                    else if(targetDesc == 'down')
-                        target = Math.max(current + 1, this.player.queue.length - 1);
-                    else
-                        target = parseInt(targetDesc);
-
-                    this.player.move(current, target);
-                }
-            })
-            .on('shuffle', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                this.player.shuffle();
-            })
-            .on('volume', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                if(cmd.arguments.length > 0) {
-                    let temp = cmd.arguments[0];
-                    if(temp) {
-                        let volume = Math.min(Math.max(parseInt(temp), 0), 100);
-                        this.player.setVolume(volume);
-                    }
-                }
-                msg.channel.send(createInfoEmbed(`Volume is at ${this.player.getVolume()}`));
-            })
-            .on('repeat', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
-                this.config.queue.repeat = !this.config.queue.repeat;
-                msg.channel.send(createInfoEmbed(`Repeat mode is ${this.config.queue.repeat ? 'on':'off'}`));
+            .on('play', (cmd: SuccessfulParsedMessage<Message>, msg: Message) => {
+                this.addAndPlayMusicAsync(cmd);
             });
     }
 
-    parsedMessage(msg: SuccessfulParsedMessage<Message>) {
+    async addAndPlayMusicAsync(cmd: SuccessfulParsedMessage<Message>) {
+        if (cmd.body.length > 0) {
+            await this.player.addMedia(cmd.body);
+            if (!this.player.connection) {
+                let conn = await joinUserChannel(cmd.message);
+                this.player.connection = conn;
+            }
+            if (!this.player.playing) {
+                this.player.play();
+            }
+        }
+    }
+
+    parsedMessage(msg: SuccessfulParsedMessage<Message<boolean>>) {
         const handlers = this.commands.get(msg.command);
         if (handlers) {
             this.player.channel = msg.message.channel;
@@ -200,14 +221,12 @@ export class RhythmBot extends IBot<IRhythmBotConfig> {
 
     onReady(client: Client): void {
         this.player.determineStatus();
-        console.log(`Guilds: ${this.client.guilds.cache.keyArray().length}`);
+        console.log(`Guilds: ${this.client.guilds.cache.keys.length}`);
         this.client.guilds.cache.forEach(guild => {
             console.log(`Guild Name: ${guild.name}`);
             const manageMessagesRole = guild.roles.cache.has('MANAGE_MESSAGES');
             console.log(`- Can Manage Messages: ${manageMessagesRole}`);
         });
     }
-
-    onRegisterConsoleCommands(map: CommandMap<(args: ParsedArgs, rl: Interface) => void>): void { }
     
 }

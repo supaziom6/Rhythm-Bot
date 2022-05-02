@@ -9,9 +9,9 @@ export class BotStatus {
 
     setBanner(status: string) {
         this.client.user.setPresence({
-            activity: {
-                name: status
-            }
+            activities: [
+                {name: status}
+            ]
         });
     }
 

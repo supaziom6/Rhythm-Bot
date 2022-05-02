@@ -3,13 +3,16 @@ import { BotStatus } from '../bot/bot-status';
 import { MediaQueue } from './media-queue';
 import { MediaItem } from './media-item.model';
 import { IMediaType } from './media-type.model';
-import { secondsToTimestamp } from '../helpers';
-import { createEmbed, createErrorEmbed, createInfoEmbed } from '../helpers';
-import { Logger, TextChannel, DMChannel, NewsChannel, VoiceConnection, StreamDispatcher } from 'discord-bot-quickstart';
+import { createEmbed, createEmbedObj, createErrorEmbed, createInfoEmbed } from '../helpers';
 import { Readable } from 'stream';
-import * as ytdl from 'ytdl-core';
-import * as ytpl from 'ytpl';
-import * as yts from 'yt-search';
+import ytdl from 'ytdl-core';
+import ytpl from 'ytpl';
+import yts from 'yt-search';
+import { Logger } from 'winston';
+import { DiscordAPIError, DMChannel, NewsChannel, PartialDMChannel, TextChannel, ThreadChannel } from 'discord.js';
+import { AudioPlayer, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection } from '@discordjs/voice';
+import { createReadStream, ReadStream } from 'fs';
+import { PassThrough } from 'stream';
 
 export class MediaPlayer {
     typeRegistry: Map<string, IMediaType> = new Map<string, IMediaType>();
@@ -20,9 +23,9 @@ export class MediaPlayer {
     config: IRhythmBotConfig;
     status: BotStatus;
     logger: Logger;
-    channel: TextChannel | DMChannel | NewsChannel;
+    channel: TextChannel | DMChannel | NewsChannel | PartialDMChannel | ThreadChannel;
     connection?: VoiceConnection;
-    dispatcher?: StreamDispatcher;
+    dispatcher?: AudioPlayer;
 
     constructor(config: IRhythmBotConfig, status: BotStatus, logger: Logger) {
         this.config = config;
@@ -30,13 +33,18 @@ export class MediaPlayer {
         this.logger = logger;
     }
 
-    getStream(item: MediaItem): Promise<Readable> 
+    getStream(item: MediaItem): Promise<PassThrough> 
     {
-        return new Promise<Readable>((done, error) => 
+        return new Promise<PassThrough>((done, error) => 
         {
-            let stream = ytdl(item.url, { filter: 'audioonly', quality: 'highestaudio' });
-            if(stream)
-                done(stream);
+            let ytdlstream = ytdl(item.url, { filter: 'audioonly', quality: 'highestaudio' });
+
+            var passthrough = new PassThrough();
+            
+            if(ytdlstream){
+                ytdlstream.pipe(passthrough);
+                done(passthrough);
+            }
             else
                 error('Unable to get media stream');
         });
@@ -62,9 +70,9 @@ export class MediaPlayer {
 
                 if (this.channel) {
                     let itemsS = items.map((item_2, idx) => `${idx + 1}. Title: "${item_2.name}"`);
-                    this.channel.send(
-                        createInfoEmbed('Tracks Added', itemsS.join('\n\n'))
-                    );
+                    this.channel.send( 
+                        createEmbedObj(createInfoEmbed('Tracks Added', itemsS.join('\n\n')))
+                    ).catch(err => this.logger.error(err));
                 }
             }
             else {
@@ -72,7 +80,8 @@ export class MediaPlayer {
             }
         } catch (err) {
             if (this.channel)
-                this.channel.send(createErrorEmbed(`Error adding track: ${err}`));
+                this.channel.send(
+                    createEmbedObj(createErrorEmbed(`Error adding track: ${err}`)));
         }
     }
 
@@ -83,7 +92,6 @@ export class MediaPlayer {
         let item:MediaItem = {
             url: url,
             name: info.videoDetails.title ? info.videoDetails.title : 'Unknown',
-            duration: secondsToTimestamp(parseInt(info.videoDetails.lengthSeconds) || 0)
         };
             
         this.queue.enqueue(item);
@@ -106,13 +114,15 @@ export class MediaPlayer {
         
         if(this.channel && item)
             this.channel.send(
-                createEmbed()
+                
+                createEmbedObj(
+                    createEmbed()
                     .setTitle('Track Added')
                     .addFields(
                         { name: 'Title:', value: item.name },
                         { name: 'Position:', value: `${this.queue.indexOf(item) + 1}`, inline: true },
                         )
-                );
+                ));
     }
 
 
@@ -126,7 +136,8 @@ export class MediaPlayer {
         this.queue.dequeue(item);
         this.determineStatus();
         if(this.channel)
-            this.channel.send(createInfoEmbed(`Track Removed`, `${item.name}`));
+            this.channel.send(
+                createEmbedObj(createInfoEmbed(`Track Removed`, `${item.name}`)));
     }
 
     clear() {
@@ -135,37 +146,37 @@ export class MediaPlayer {
         this.queue.clear();
         this.determineStatus();
         if(this.channel)
-            this.channel.send(createInfoEmbed(`Playlist Cleared`));
+            this.channel.send(
+                createEmbedObj(createInfoEmbed(`Playlist Cleared`)));
     }
 
-    dispatchStream(stream: Readable, item: MediaItem) {
+    async dispatchStream(stream: PassThrough, item: MediaItem) {
         if(this.dispatcher) {
-            this.dispatcher.end();
+            this.dispatcher.stop();
             this.dispatcher = null;
         }
-        this.dispatcher = this.connection.play(stream, {
-            seek: this.config.stream.seek,
-            volume: this.config.stream.volume,
-            bitrate: this.config.stream.bitrate,
-            fec: this.config.stream.forwardErrorCorrection,
-            plp: this.config.stream.packetLossPercentage,
-            highWaterMark: 1<<25
+        this.dispatcher = createAudioPlayer({
+            debug: true,
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play,
+            },
         });
-        this.dispatcher.on('start', async () => {
-            this.playing = true;
+        let resource = createAudioResource(stream);
+        this.dispatcher.play(resource);
+        this.connection.subscribe(this.dispatcher);
+        this.playing = true;
             this.determineStatus();
             if(this.channel) {
                 const msg = await this.channel.send(
-                    createEmbed()
+                    createEmbedObj(
+                        createEmbed()
                         .setTitle('▶️ Now playing')
-                        .setDescription(`${item.name}`)
-                );
+                        .setDescription(`${item.name}`)));
                 msg.react(this.config.emojis.stopSong);
                 msg.react(this.config.emojis.playSong);
                 msg.react(this.config.emojis.pauseSong);
                 msg.react(this.config.emojis.skipSong);
             }
-        });
         this.dispatcher.on('debug', (info: string) => {
             this.logger.debug(info);
         });
@@ -173,50 +184,15 @@ export class MediaPlayer {
             this.skip();
             this.logger.error(err);
             if(this.channel)
-                this.channel.send(createErrorEmbed(`Error Playing Song: ${err}`));
-        });
-        this.dispatcher.on('close', () => {
-            this.logger.debug(`Stream Closed`);
-            if (this.dispatcher) {
-                this.playing = false;
-                this.dispatcher = null;
-                this.determineStatus();
-                if(!this.stopping) {
-                    let track = this.queue.dequeue();
-                    if(this.config.queue.repeat)
-                        this.queue.enqueue(track);
-                        setTimeout(() => {
-                            this.play();
-                        }, 1000);
-                }
-                this.stopping = false;
-            }
-        });
-        this.dispatcher.on('finish', () => {
-            this.logger.debug('Stream Finished');
-            if (this.dispatcher) {
-                this.playing = false;
-                this.dispatcher = null;
-                this.determineStatus();
-                if(!this.stopping) {
-                    let track = this.queue.dequeue();
-                    if(this.config.queue.repeat)
-                        this.queue.enqueue(track);
-                        setTimeout(() => {
-                            this.play();
-                        }, 1000);
-                }
-                this.stopping = false;
-            }
-        });
-        this.dispatcher.on('end', (reason: string) => {
-            this.logger.debug(`Stream Ended: ${reason}`);
+                this.channel.send(
+                    createEmbedObj(createErrorEmbed(`Error Playing Song: ${err}`)));
         });
     }
 
     play() {
         if(this.queue.length == 0 && this.channel)
-            this.channel.send(createInfoEmbed(`Queue is empty! Add some songs!`));
+            this.channel.send(
+                createEmbedObj(createInfoEmbed(`Queue is empty! Add some songs!`)));
         let item = this.queue.first;
         if(item && this.connection) {
             if(!this.playing) {
@@ -225,11 +201,12 @@ export class MediaPlayer {
                         this.dispatchStream(stream, item);
                     });
             } else if(this.paused && this.dispatcher) {
-                this.dispatcher.resume();
+                this.dispatcher.unpause();
                 this.paused = false;
                 this.determineStatus();
                 if(this.channel)
-                    this.channel.send(createInfoEmbed(`⏯️ "${this.queue.first.name}" resumed`));
+                    this.channel.send(
+                        createEmbedObj(createInfoEmbed(`⏯️ "${this.queue.first.name}" resumed`)));
             }
         }
     }
@@ -241,26 +218,40 @@ export class MediaPlayer {
             this.paused = false;
             this.playing = false;
             this.dispatcher.pause();
-            this.dispatcher.destroy();
+            this.dispatcher = null;
             this.determineStatus();
             if(this.channel)
-                this.channel.send(createInfoEmbed(`⏹️ "${item.name}" stopped`));
+                this.channel.send(
+                    createEmbedObj(createInfoEmbed(`⏹️ "${item.name}" stopped`)));
         }
     }
 
     skip() {
         if(this.playing && this.dispatcher) {
             let item = this.queue.first;
+            this.queue.dequeue();
+            let itemNew = this.queue.first;
             this.paused = false;
             this.dispatcher.pause();
-            this.dispatcher.destroy();
+            this.dispatcher = null;
+            this.getStream(itemNew)
+                .then(stream => {
+                    this.dispatchStream(stream, itemNew);
+                });
             if(this.channel)
-                this.channel.send(createInfoEmbed(`⏭️ "${item.name}" skipped`));
+                this.channel.send(
+                    createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
         } else if(this.queue.length > 0) {
             let item = this.queue.first;
             this.queue.dequeue();
+            let itemNew = this.queue.first;
             if(this.channel)
-                this.channel.send(createInfoEmbed(`⏭️ "${item.name}" skipped`));
+                this.channel.send(
+                    createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
+            this.getStream(itemNew)
+                .then(stream => {
+                    this.dispatchStream(stream, itemNew);
+                });
         }
         this.determineStatus();
     }
@@ -271,7 +262,8 @@ export class MediaPlayer {
             this.paused = true;
             this.determineStatus();
             if(this.channel)
-                this.channel.send(createInfoEmbed(`⏸️ "${this.queue.first.name}" paused`));
+                this.channel.send(
+                    createEmbedObj(createInfoEmbed(`⏸️ "${this.queue.first.name}" paused`)));
         }
     }
 
@@ -281,7 +273,8 @@ export class MediaPlayer {
         this.queue.shuffle();
         this.determineStatus();
         if(this.channel)
-            this.channel.send(createInfoEmbed(`🔀 Queue Shuffled`));
+            this.channel.send(
+                createEmbedObj(createInfoEmbed(`🔀 Queue Shuffled`)));
     }
 
     move(currentIdx: number, targetIdx: number) {
@@ -294,18 +287,6 @@ export class MediaPlayer {
             this.queue.move(currentIdx, targetIdx);
             this.determineStatus();
         }
-    }
-
-    setVolume(volume: number) {
-        volume = Math.min(Math.max((volume / 100) + 0.5, 0.5), 2);
-        this.config.stream.volume = volume;
-        if(this.dispatcher) {
-            this.dispatcher.setVolume(volume);
-        }
-    }
-
-    getVolume() {
-        return ((this.config.stream.volume - 0.5) * 100) + '%';
     }
 
     determineStatus() {
