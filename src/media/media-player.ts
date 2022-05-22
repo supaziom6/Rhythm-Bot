@@ -10,7 +10,7 @@ import ytpl from 'ytpl';
 import yts from 'yt-search';
 import { Logger } from 'winston';
 import { DiscordAPIError, DMChannel, NewsChannel, PartialDMChannel, TextChannel, ThreadChannel } from 'discord.js';
-import { AudioPlayer, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection } from '@discordjs/voice';
+import { AudioPlayer, AudioPlayerStatus, createAudioPlayer, AudioResource, createAudioResource, NoSubscriberBehavior, VoiceConnection, demuxProbe } from '@discordjs/voice';
 import { createReadStream, ReadStream } from 'fs';
 import { PassThrough } from 'stream';
 
@@ -31,23 +31,36 @@ export class MediaPlayer {
         this.config = config;
         this.status = status;
         this.logger = logger;
+        this.dispatcher = createAudioPlayer({
+            debug: true,
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play
+            }
+        });
+        
+        this.dispatcher.on('debug', (info: string) => {
+            console.log(info);
+        });
+        this.dispatcher.on('error', err => {
+            this.skip();
+            console.log(err);
+            if(this.channel)
+                this.channel.send(
+                    createEmbedObj(createErrorEmbed(`Error Playing Song: ${err}`)));
+        });
     }
 
-    getStream(item: MediaItem): Promise<PassThrough> 
+    connect()
     {
-        return new Promise<PassThrough>((done, error) => 
-        {
-            let ytdlstream = ytdl(item.url, { filter: 'audioonly', quality: 'highestaudio' });
+        this.connection.subscribe(this.dispatcher);
+    }
 
-            var passthrough = new PassThrough();
-            
-            if(ytdlstream){
-                ytdlstream.pipe(passthrough);
-                done(passthrough);
-            }
-            else
-                error('Unable to get media stream');
-        });
+
+    async getStream(item: MediaItem): Promise<AudioResource<MediaItem>> 
+    {
+        var vidInfo = await ytdl.getInfo(item.url);
+        var stream = ytdl.downloadFromInfo(vidInfo)
+        return createAudioResource(stream, { metadata: item });
     }
 
     async addMedia(url: string): Promise<void> {
@@ -72,7 +85,7 @@ export class MediaPlayer {
                     let itemsS = items.map((item_2, idx) => `${idx + 1}. Title: "${item_2.name}"`);
                     this.channel.send( 
                         createEmbedObj(createInfoEmbed('Tracks Added', itemsS.join('\n\n')))
-                    ).catch(err => this.logger.error(err));
+                    ).catch(err => console.log(err));
                 }
             }
             else {
@@ -150,43 +163,22 @@ export class MediaPlayer {
                 createEmbedObj(createInfoEmbed(`Playlist Cleared`)));
     }
 
-    async dispatchStream(stream: PassThrough, item: MediaItem) {
-        if(this.dispatcher) {
-            this.dispatcher.stop();
-            this.dispatcher = null;
-        }
-        this.dispatcher = createAudioPlayer({
-            debug: true,
-            behaviors: {
-                noSubscriber: NoSubscriberBehavior.Play,
-            },
-        });
-        let resource = createAudioResource(stream);
-        this.dispatcher.play(resource);
-        this.connection.subscribe(this.dispatcher);
+    async dispatchStream(stream: AudioResource<MediaItem>) {
+
+        this.dispatcher.play(stream);
         this.playing = true;
-            this.determineStatus();
-            if(this.channel) {
-                const msg = await this.channel.send(
-                    createEmbedObj(
-                        createEmbed()
-                        .setTitle('▶️ Now playing')
-                        .setDescription(`${item.name}`)));
-                msg.react(this.config.emojis.stopSong);
-                msg.react(this.config.emojis.playSong);
-                msg.react(this.config.emojis.pauseSong);
-                msg.react(this.config.emojis.skipSong);
-            }
-        this.dispatcher.on('debug', (info: string) => {
-            this.logger.debug(info);
-        });
-        this.dispatcher.on('error', err => {
-            this.skip();
-            this.logger.error(err);
-            if(this.channel)
-                this.channel.send(
-                    createEmbedObj(createErrorEmbed(`Error Playing Song: ${err}`)));
-        });
+        this.determineStatus();
+        if(this.channel) {
+            const msg = await this.channel.send(
+                createEmbedObj(
+                    createEmbed()
+                    .setTitle('▶️ Now playing')
+                    .setDescription(`${stream.metadata.name}`)));
+            msg.react(this.config.emojis.stopSong);
+            msg.react(this.config.emojis.playSong);
+            msg.react(this.config.emojis.pauseSong);
+            msg.react(this.config.emojis.skipSong);
+        }
     }
 
     play() {
@@ -198,7 +190,7 @@ export class MediaPlayer {
             if(!this.playing) {
                 this.getStream(item)
                     .then(stream => {
-                        this.dispatchStream(stream, item);
+                        this.dispatchStream(stream);
                     });
             } else if(this.paused && this.dispatcher) {
                 this.dispatcher.unpause();
@@ -232,11 +224,9 @@ export class MediaPlayer {
             this.queue.dequeue();
             let itemNew = this.queue.first;
             this.paused = false;
-            this.dispatcher.pause();
-            this.dispatcher = null;
             this.getStream(itemNew)
                 .then(stream => {
-                    this.dispatchStream(stream, itemNew);
+                    this.dispatchStream(stream);
                 });
             if(this.channel)
                 this.channel.send(
@@ -250,7 +240,7 @@ export class MediaPlayer {
                     createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
             this.getStream(itemNew)
                 .then(stream => {
-                    this.dispatchStream(stream, itemNew);
+                    this.dispatchStream(stream);
                 });
         }
         this.determineStatus();

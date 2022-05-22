@@ -75,7 +75,7 @@ export class RhythmBot {
 
         // Notify when they client is online
         this.client.on('ready', () => {
-            this.logger.debug('Bot Online');
+            console.log('Bot Online');
             this.onReady(this.client);
         });
 
@@ -87,7 +87,7 @@ export class RhythmBot {
             this.parsedMessage(parsed);
             let handlers = this.commands.get(parsed.command);
             if (handlers) {
-                this.logger.debug(`Bot Command: ${message.content}`);
+                console.log(`Bot Command: ${message.content}`);
                 handlers.forEach(handle => {
                     handle(parsed as SuccessfulParsedMessage<Message<boolean>>, message);
                 });
@@ -96,7 +96,6 @@ export class RhythmBot {
 
         // Handel any client errors.
         this.client.on('error', (error) => {
-            this.logger.error(error);
             console.log(error);
         });
         
@@ -161,6 +160,7 @@ export class RhythmBot {
             if (!this.player.connection) {
                 let conn = await joinUserChannel(cmd.message);
                 this.player.connection = conn;
+                this.player.connect();
             }
             if (!this.player.playing) {
                 this.player.play();
@@ -184,7 +184,7 @@ export class RhythmBot {
                 try {
                     await reaction.fetch();
                 } catch (error) {
-                    this.logger.debug(error);
+                    console.log(error);
                     return;
                 }
             }
@@ -193,23 +193,23 @@ export class RhythmBot {
                     const embed = reaction.message.embeds[0];
                     if (embed) {
                         if (reaction.emoji.name === this.config.emojis.addSong && embed.url) {
-                            this.logger.debug(`Emoji Click: Adding Media: ${embed.url}`);
+                            console.log(`Emoji Click: Adding Media: ${embed.url}`);
                             this.player.addMedia(embed.url);
                         }
                         if (reaction.emoji.name === this.config.emojis.stopSong) {
-                            this.logger.debug('Emoji Click: Stopping Song');
+                            console.log('Emoji Click: Stopping Song');
                             this.player.stop();
                         }
                         if (reaction.emoji.name === this.config.emojis.playSong) {
-                            this.logger.debug('Emoji Click: Playing/Resuming Song');
+                            console.log('Emoji Click: Playing/Resuming Song');
                             this.player.play();
                         }
                         if (reaction.emoji.name === this.config.emojis.pauseSong) {
-                            this.logger.debug('Emoji Click: Pausing Song');
+                            console.log('Emoji Click: Pausing Song');
                             this.player.pause();
                         }
                         if (reaction.emoji.name === this.config.emojis.skipSong) {
-                            this.logger.debug('Emoji Click: Skipping Song');
+                            console.log('Emoji Click: Skipping Song');
                             this.player.skip();
                         }
                     }
