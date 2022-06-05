@@ -42,11 +42,15 @@ export class MediaPlayer {
             console.log(info);
         });
         this.dispatcher.on('error', err => {
-            this.skip();
             console.log(err);
-            if(this.channel)
-                this.channel.send(
-                    createEmbedObj(createErrorEmbed(`Error Playing Song: ${err}`)));
+            if(this.channel){
+                this.channel.send(createEmbedObj(createErrorEmbed(`Error Playing Song: ${err}`)));
+            }
+            this.skip();
+        });
+        this.dispatcher.on(AudioPlayerStatus.Idle, idle_AudioPlayerEvents => {
+            this.skip(true);
+            console.log(idle_AudioPlayerEvents);
         });
     }
 
@@ -218,30 +222,23 @@ export class MediaPlayer {
         }
     }
 
-    skip() {
-        if(this.playing && this.dispatcher) {
-            let item = this.queue.first;
-            this.queue.dequeue();
-            let itemNew = this.queue.first;
+    async skip(noMessage: boolean = false) {
+        let item = this.queue.first;
+        this.queue.dequeue();
+        let itemNew = this.queue.first;
+        
+        if(itemNew != null){
             this.paused = false;
-            this.getStream(itemNew)
-                .then(stream => {
-                    this.dispatchStream(stream);
-                });
-            if(this.channel)
-                this.channel.send(
-                    createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
-        } else if(this.queue.length > 0) {
-            let item = this.queue.first;
-            this.queue.dequeue();
-            let itemNew = this.queue.first;
-            if(this.channel)
-                this.channel.send(
-                    createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
-            this.getStream(itemNew)
-                .then(stream => {
-                    this.dispatchStream(stream);
-                });
+            let stream = await this.getStream(itemNew);
+            await this.dispatchStream(stream);
+        }
+        else{
+            this.dispatcher.stop();
+        }
+
+
+        if(!noMessage && this.channel && item != null){
+            await this.channel.send(createEmbedObj(createInfoEmbed(`⏭️ "${item.name}" skipped`)));
         }
         this.determineStatus();
     }
